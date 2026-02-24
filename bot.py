@@ -1,12 +1,22 @@
 import asyncio
-import io
 import json
 import os
 from datetime import datetime
+from telethon import TelegramClient, events
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
-# حالات المحادثة
+# ========== البيانات ==========
+API_ID = 39458857
+API_HASH = "3b62c284e0f6b6b0b16ba6d7b46a4a6f"
+BOT_TOKEN = "8666815258:AAHrMUXt9GdlRkld5cLoOu3qFCPXRYZOQIQ"
+PHONE_NUMBER = "967735264023"
+ADMIN_ID = 1972494449
+CHANNEL_USERNAME = "@GSN_MOD"  # معرف القناة
+SESSION_STRING = "1BJWap1sBu3zgU7WP5-n2wRQTSuJduN7DNxzIdfM2e_4FptGKHvUbrWfsynuMt_fbmC_Qmh68fKP5fEujloHTo_c5e4dlzornqDQxzPGlQn1J9W4tp9Qsu66w7BZiOC3_D4Gh1-wRzUoRp-7tjZUiSvT0z3J6rX3vwR6lBb2Ntq_rni9kMNTuLSjiAZVkSpFAIBxfM8JxCS1qeAGyx5IY6OlP4goEyXyOPGVcYvXsTpeN2IPhikwDnMWSF0tvRlyjHaRGNTkc1_XmXs8HibQWZtW7cAClnLYeHAcXP3MgfToVzSwXRwnnFUCA_oxDVkMzeJFkERIdKDVUaAfktmQazeoLprdoY-I="
+
+# ========== إعدادات ==========
+# حالات المحادثة للبوت العادي
 NAME, PHOTO, FILE = range(3)
 
 # بيانات مؤقتة للتطبيق
@@ -27,11 +37,35 @@ def save_downloads(downloads):
     with open(DOWNLOADS_FILE, 'w', encoding='utf-8') as f:
         json.dump(downloads, f, ensure_ascii=False, indent=2)
 
-# أمر البدء
+# ========== تشغيل Telethon (يوزر بوت) ==========
+user_client = TelegramClient('user_session', API_ID, API_HASH)
+
+async def start_userbot():
+    """تشغيل يوزر بوت"""
+    try:
+        if SESSION_STRING:
+            await user_client.start(bot_token=BOT_TOKEN)  # جرب كبوت أولاً
+            print("✅ يوزر بوت شغال كبوت")
+        else:
+            await user_client.start(phone=PHONE_NUMBER)
+            print("✅ يوزر بوت شغال كمستخدم")
+    except:
+        try:
+            await user_client.start(phone=PHONE_NUMBER)
+            print("✅ يوزر بوت شغال كمستخدم")
+        except Exception as e:
+            print(f"❌ فشل تشغيل يوزر بوت: {e}")
+    
+    # استقبال الأوامر من القناة (للتأكد)
+    @user_client.on(events.NewMessage(chats=CHANNEL_USERNAME))
+    async def handler(event):
+        print(f"📨 رسالة جديدة في القناة: {event.message.text[:50]}")
+
+# ========== دوال البوت العادي (PTB) ==========
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # إذا دخل من رابط تحميل
     if context.args and context.args[0].startswith('download_'):
         app_id = context.args[0]
         downloads = load_downloads()
@@ -39,38 +73,32 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if app_id in downloads:
             app_info = downloads[app_id]
             try:
-                # محاولة إرسال الملف بعد بدء المحادثة
-                await context.bot.send_document(
-                    chat_id=user.id,
-                    document=app_info['file_id'],
-                    filename=app_info['file_name'],
+                # محاولة إرسال الملف عن طريق يوزر بوت (مايحتاج start)
+                await user_client.send_file(
+                    user.id,
+                    app_info['file_id'],
                     caption=f"📥 **تحميل {app_info['name']}**\nشكراً لتحميلك التطبيق!"
                 )
                 
-                await update.message.reply_text(
-                    "✅ **تم التحميل بنجاح!**\n"
-                    "تم إرسال الملف لك في الخاص."
-                )
+                await update.message.reply_text("✅ **تم التحميل بنجاح!**")
                 return
             except Exception as e:
                 await update.message.reply_text(f"❌ حدث خطأ: {str(e)[:100]}")
                 return
     
-    # الوضع العادي للبدء
     welcome_text = (
         f"✨ مرحباً {user.first_name}!\n\n"
-        "📱 **بوت رفع التطبيقات الاحترافي**\n"
+        "📱 **بوت رفع التطبيقات**\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         "🔹 سهل الاستخدام\n"
         "🔹 عداد تحميل تلقائي\n"
-        "🔹 نشر احترافي في القناة\n"
+        "🔹 إرسال عن طريق يوزر بوت\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
         "👇 **أرسل اسم التطبيق** للبدء"
     )
     await update.message.reply_text(welcome_text)
     return NAME
 
-# استقبال اسم التطبيق
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app_name = update.message.text
     user_id = update.effective_user.id
@@ -86,7 +114,6 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return PHOTO
 
-# استقبال صورة التطبيق
 async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
@@ -95,18 +122,16 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "✅ **تم استلام الصورة**\n\n"
-        "📦 **أرسل ملف التطبيق الآن**\n"
-        "(APK - IPA - ZIP)"
+        "📦 **أرسل ملف التطبيق الآن**"
     )
     return FILE
 
-# استقبال ملف التطبيق
 async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    channel_id = -1002814161087  # قناة GSN-MOD
+    channel_id = int(os.environ.get('CHANNEL_ID', -1002814161087))
     
     if user_id not in app_data or 'name' not in app_data[user_id] or 'photo' not in app_data[user_id]:
-        await update.message.reply_text("❌ حدث خطأ، الرجاء البدء من جديد باستخدام /start")
+        await update.message.reply_text("❌ حدث خطأ، الرجاء البدء من جديد")
         return ConversationHandler.END
     
     app_name = app_data[user_id]['name']
@@ -146,9 +171,7 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 **المطور:** {update.effective_user.mention_html()}\n"
             f"📅 **التاريخ:** {datetime.now().strftime('%Y-%m-%d')}\n"
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-            f"💬 **كلمة للمتابعين:**\n"
-            f"إذا عجبك التطبيق لا تنسى تشارك المنشور مع أصدقائك 👍\n"
-            f"ودعماً للمطورين 👇 اضغط على زر التحميل"
+            f"💬 **لتحميل التطبيق:** اضغط على زر التحميل أدناه"
         )
         
         bot_username = (await context.bot.get_me()).username
@@ -162,6 +185,7 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        # إرسال للقناة عن طريق البوت العادي
         await context.bot.send_photo(
             chat_id=channel_id,
             photo=photo_id,
@@ -175,7 +199,7 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🎉 **مبروك! تم رفع تطبيقك**\n\n"
             "✅ أصبح التطبيق الآن في القناة\n"
-            "🔗 @GSN_MOD\n\n"
+            f"🔗 {CHANNEL_USERNAME}\n\n"
             "📊 **عداد التحميلات يعمل تلقائياً**"
         )
         
@@ -185,8 +209,8 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del app_data[user_id]
     return ConversationHandler.END
 
-# معالج زر التحميل
 async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج زر التحميل - يستخدم يوزر بوت للإرسال"""
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer()
@@ -198,11 +222,10 @@ async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         app_info = downloads[app_id]
         
         try:
-            # محاولة إرسال الملف
-            await context.bot.send_document(
-                chat_id=user_id,
-                document=app_info['file_id'],
-                filename=app_info['file_name'],
+            # ✅ إرسال الملف عن طريق يوزر بوت (ما يحتاج المستخدم يضغط start)
+            await user_client.send_file(
+                user_id,
+                app_info['file_id'],
                 caption=f"📥 **تحميل {app_info['name']}**\nشكراً لتحميلك التطبيق!"
             )
             
@@ -227,29 +250,10 @@ async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             error = str(e).lower()
-            
-            # إذا المستخدم ما بدأ محادثة مع البوت
-            if "chat not found" in error or "bot can't initiate conversation" in error:
-                bot_username = (await context.bot.get_me()).username
-                start_link = f"https://t.me/{bot_username}?start=download_{app_id}"
-                
-                keyboard = [[
-                    InlineKeyboardButton("🤖 اضغط هنا لبدء المحادثة", url=start_link)
-                ]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(
-                    text="❌ **لا يمكن إرسال الملف**\n\n"
-                         "عشان تحمل التطبيق، لازم تبدأ محادثة مع البوت أولاً.\n"
-                         "اضغط على الزر تحت وبعدها ارجع اضغط على تحميل",
-                    reply_markup=reply_markup
-                )
-            else:
-                await query.edit_message_text(f"❌ حدث خطأ: {str(e)[:100]}")
+            await query.edit_message_text(f"❌ حدث خطأ: {str(e)[:100]}")
     else:
         await query.edit_message_text("❌ التطبيق غير موجود")
 
-# إلغاء العملية
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in app_data:
@@ -258,7 +262,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ تم إلغاء العملية.")
     return ConversationHandler.END
 
-# أمر الإحصائيات
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     downloads = load_downloads()
     
@@ -285,24 +288,26 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(stats_text)
 
-# أمر اختبار القناة
 async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    channel_id = -1002814161087
+    channel_id = int(os.environ.get('CHANNEL_ID', -1002814161087))
     
     try:
         await context.bot.send_message(
             chat_id=channel_id,
-            text="✅ البوت يعمل على Render ويستقبل الأوامر!"
+            text="✅ البوت يعمل ويستخدم يوزر بوت للإرسال!"
         )
         await update.message.reply_text("✅ تم إرسال رسالة اختبار للقناة")
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {str(e)}")
 
-# البرنامج الرئيسي
-def main():
-    TOKEN = "8666815258:AAHrMUXt9GdlRkld5cLoOu3qFCPXRYZOQIQ"
+# ========== تشغيل البوتين معاً ==========
+async def run_bot():
+    """تشغيل البوت العادي ويوزر بوت معاً"""
+    # تشغيل يوزر بوت
+    asyncio.create_task(start_userbot())
     
-    application = Application.builder().token(TOKEN).build()
+    # تشغيل البوت العادي
+    application = Application.builder().token(BOT_TOKEN).build()
     
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -319,9 +324,17 @@ def main():
     application.add_handler(CommandHandler('stats', stats))
     application.add_handler(CommandHandler('test', test))
     
-    print("✅ البوت الاحترافي يعمل...")
+    print("✅ البوت العادي يعمل...")
+    print("✅ يوزر بوت يعمل...")
     print("⚡ في انتظار التطبيقات...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    
+    # البقاء قيد التشغيل
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(run_bot())
