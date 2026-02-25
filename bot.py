@@ -3,24 +3,24 @@ import asyncio
 import json
 from datetime import datetime
 from telethon import TelegramClient, errors
+from telethon.sessions import StringSession
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 import logging
 
-# ========== إعدادات التسجيل (Logging) ==========
+# ========== إعدادات التسجيل ==========
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ========== قراءة المتغيرات من Railway ==========
+# ========== قراءة المتغيرات ==========
 required_vars = ['API_ID', 'API_HASH', 'BOT_TOKEN', 'PHONE_NUMBER', 'ADMIN_ID', 'CHANNEL_USERNAME']
 missing_vars = [var for var in required_vars if not os.environ.get(var)]
 
 if missing_vars:
     logger.error(f"❌ المتغيرات التالية غير موجودة: {', '.join(missing_vars)}")
-    logger.error("يرجى إضافتها في إعدادات Railway")
     exit(1)
 
 API_ID = int(os.environ.get('API_ID'))
@@ -35,13 +35,12 @@ if not CHANNEL_USERNAME.startswith('@'):
     CHANNEL_USERNAME = '@' + CHANNEL_USERNAME
 
 # ========== إعدادات البوت ==========
-NAME, PHOTO, FILE, VERSION_CODE = range(4)  # أضفنا VERSION_CODE
+NAME, PHOTO, FILE, VERSION_CODE = range(4)
 app_data = {}
 DOWNLOADS_FILE = "downloads_counter.json"
-SESSION_FILE = "user_session.session"
-VERSION_COUNTER_FILE = "version_counter.json"  # ملف لحفظ آخر رقم إصدار
+VERSION_COUNTER_FILE = "version_counter.json"
 
-# تحميل وحفظ عداد التحميلات
+# ========== دوال المساعدة ==========
 def load_downloads():
     try:
         if os.path.exists(DOWNLOADS_FILE):
@@ -58,7 +57,6 @@ def save_downloads(downloads):
     except Exception as e:
         logger.error(f"خطأ في حفظ التحميلات: {e}")
 
-# تحميل وحفظ عداد الإصدارات
 def load_version_counter():
     try:
         if os.path.exists(VERSION_COUNTER_FILE):
@@ -75,14 +73,12 @@ def save_version_counter(version):
     except Exception as e:
         logger.error(f"خطأ في حفظ عداد الإصدارات: {e}")
 
-# الحصول على رقم الإصدار التالي
 def get_next_version():
     current = load_version_counter()
     next_version = current + 1
     save_version_counter(next_version)
     return f"V{next_version}"
 
-# حساب حجم الملف بطريقة مفهومة
 def get_file_size(file_size_bytes):
     if file_size_bytes < 1024 * 1024:
         return f"{file_size_bytes / 1024:.1f} KB"
@@ -91,44 +87,101 @@ def get_file_size(file_size_bytes):
     else:
         return f"{file_size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
-# ========== تشغيل يوزر بوت (Telethon) ==========
-user_client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
+# ========== تشغيل يوزر بوت ==========
+user_client = None
 
-async def start_userbot():
-    """تشغيل يوزر بوت للإرسال المباشر"""
+async def init_userbot():
+    """تهيئة اليوزربوت بشكل صحيح"""
+    global user_client
     try:
         logger.info("🔄 جاري تشغيل اليوزربوت...")
         
         if SESSION_STRING:
-            from telethon.sessions import StringSession
+            # استخدام Session String
             user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
             await user_client.connect()
             logger.info("✅ يوزر بوت متصل باستخدام Session String")
         else:
+            # تسجيل الدخول برقم الهاتف
+            user_client = TelegramClient('user_session', API_ID, API_HASH)
             await user_client.start(phone=PHONE_NUMBER)
             logger.info("✅ يوزر بوت متصل باستخدام رقم الهاتف")
+            # حفظ Session String
             session_str = user_client.session.save()
-            logger.info(f"🔑 Session String الخاص بك: {session_str}")
+            logger.info(f"🔑 Session String: {session_str}")
         
+        # التأكد من أن اليوزربوت شغال
         me = await user_client.get_me()
-        logger.info(f"✅ تم تسجيل الدخول بنجاح كـ: {me.first_name} (@{me.username})")
+        logger.info(f"✅ يوزر بوت شغال كـ: {me.first_name}")
         return True
         
-    except errors.SessionPasswordNeededError:
-        logger.error("❌ المصادقة الثنائية مفعلة. يرجى تعطيلها أو إضافة كلمة المرور")
-        return False
     except Exception as e:
-        logger.error(f"❌ فشل تشغيل يوزر بوت: {e}")
+        logger.error(f"❌ فشل تشغيل اليوزربوت: {e}")
         return False
 
-# ========== دوال البوت العادي ==========
+async def ensure_userbot():
+    """التأكد من أن اليوزربوت متصل"""
+    global user_client
+    try:
+        if user_client is None:
+            await init_userbot()
+            return user_client is not None
+        
+        if not user_client.is_connected():
+            await user_client.connect()
+        
+        if not await user_client.is_user_authorized():
+            if SESSION_STRING:
+                user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+                await user_client.connect()
+            else:
+                await user_client.start(phone=PHONE_NUMBER)
+        
+        return True
+    except Exception as e:
+        logger.error(f"خطأ في التأكد من اتصال اليوزربوت: {e}")
+        return False
+
+# ========== دوال البوت ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    # إذا دخل من رابط تحميل
+    if context.args and context.args[0].startswith('download_'):
+        app_id = context.args[0]
+        downloads = load_downloads()
+        
+        if app_id in downloads:
+            app_info = downloads[app_id]
+            
+            # تأكد من اتصال اليوزربوت
+            if not await ensure_userbot():
+                await update.message.reply_text("❌ مشكلة في الاتصال، حاول لاحقاً")
+                return
+            
+            try:
+                # إرسال الملف
+                await user_client.send_file(
+                    user.id,
+                    app_info['file_id'],
+                    caption=f"📥 **{app_info['name']}**\nشكراً لتحميلك التطبيق!"
+                )
+                
+                # زيادة العداد
+                app_info['downloads'] += 1
+                save_downloads(downloads)
+                
+                await update.message.reply_text("✅ **تم التحميل بنجاح!**")
+                return
+            except Exception as e:
+                await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+                logger.error(f"خطأ في التحميل: {e}")
+                return
     
     # رسالة الترحيب
     welcome_text = (
         f"✨ مرحباً {user.first_name}!\n\n"
-        "📱 **بوت رفع التطبيقات الاحترافي**\n"
+        "📱 **بوت رفع التطبيقات**\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         "🔹 ترقيم تلقائي (V1, V2, V3...)\n"
         "🔹 إضافة كود نسخة خاص\n"
@@ -165,9 +218,7 @@ async def get_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             "✅ **تم استلام الصورة**\n\n"
-            "📦 **أرسل ملف التطبيق الآن**\n"
-            "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            "🔹 ملف APK أو أي صيغة أخرى"
+            "📦 **أرسل ملف التطبيق الآن**"
         )
         return FILE
     except Exception as e:
@@ -178,7 +229,7 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if user_id not in app_data or 'name' not in app_data[user_id] or 'photo' not in app_data[user_id]:
-        await update.message.reply_text("❌ حدث خطأ، الرجاء البدء من جديد باستخدام /start")
+        await update.message.reply_text("❌ حدث خطأ، الرجاء البدء من جديد")
         return ConversationHandler.END
     
     document = update.message.document
@@ -186,17 +237,15 @@ async def get_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ الرجاء إرسال ملف صالح")
         return FILE
     
-    # حفظ معلومات الملف
     app_data[user_id]['file_id'] = document.file_id
     app_data[user_id]['file_name'] = document.file_name
     app_data[user_id]['file_size'] = document.file_size
     
-    # طلب كود النسخة
     await update.message.reply_text(
         "🔢 **أرسل كود النسخة**\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        "مثال: 1.0.0 أو 2.5 أو أي كود تريده\n\n"
-        "📝 إذا لا يوجد كود، أرسل: **بدون كود**"
+        "مثال: 1.0.0\n\n"
+        "📝 إذا لا يوجد كود، أرسل: **بدون**"
     )
     return VERSION_CODE
 
@@ -204,10 +253,8 @@ async def get_version_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     version_input = update.message.text
     
-    # تحديد كود النسخة
-    if version_input.lower() in ['بدون كود', 'بدون', 'لا يوجد', 'none', 'no']:
+    if version_input.lower() in ['بدون', 'بدون كود', 'لا', 'none', 'no']:
         version_code = "بدون كود"
-        version_display = "بدون"
     else:
         version_code = version_input
     
@@ -220,14 +267,12 @@ async def get_version_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_name = app_data[user_id]['file_name']
     file_size_bytes = app_data[user_id]['file_size']
     
-    # حساب حجم الملف ورقم الإصدار
     file_size = get_file_size(file_size_bytes)
-    version_number = get_next_version()  # V1, V2, V3...
+    version_number = get_next_version()
     
-    # إنشاء معرف فريد للتطبيق
     app_id = f"app_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    # حفظ معلومات التطبيق
+    # حفظ المعلومات
     downloads = load_downloads()
     downloads[app_id] = {
         'name': app_name,
@@ -247,15 +292,13 @@ async def get_version_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loading_msg = await update.message.reply_text("📤 **جاري النشر في القناة...**")
     
     try:
-        # تحضير نص كود النسخة (للنسخ)
+        # تحضير نص كود النسخة
         if version_code != "بدون كود":
             code_text = f"🔹 **كود النسخة:** `{version_code}`"
-            copy_hint = "(اضغط للنسخ)"
         else:
             code_text = "🔹 **كود النسخة:** بدون"
-            copy_hint = ""
         
-        # نص المنشور المحسن
+        # نص المنشور
         caption = (
             f"🚀 **{app_name}** | {version_number}\n"
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
@@ -263,14 +306,12 @@ async def get_version_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚡ **معلومات التطبيق:**\n"
             f"• الإصدار: {version_number}\n"
             f"• الحجم: {file_size}\n"
-            f"{code_text} {copy_hint}\n\n"
+            f"{code_text}\n\n"
             f"💪 **لماذا هذا التطبيق؟**\n"
             f"✓ آمن 100% ومجرب\n"
             f"✓ تحديثات مستمرة\n"
-            f"✓ دعم فني مباشر\n"
-            f"✓ جودة عالية وأداء ممتاز\n\n"
+            f"✓ دعم فني مباشر\n\n"
             f"👤 **المطور:** {update.effective_user.mention_html()}\n"
-            f"📅 **التاريخ:** {datetime.now().strftime('%Y-%m-%d')}\n"
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
             f"💬 **لتحميل التطبيق:** اضغط على زر التحميل أدناه"
         )
@@ -297,130 +338,133 @@ async def get_version_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(
             "🎉 **مبروك! تم رفع تطبيقك**\n\n"
-            f"📌 **رقم الإصدار:** {version_number}\n"
-            f"📦 **الحجم:** {file_size}\n"
-            f"🔢 **كود النسخة:** {version_code}\n\n"
-            f"✅ أصبح التطبيق الآن في القناة\n"
-            f"🔗 {CHANNEL_USERNAME}\n\n"
-            "📊 **عداد التحميلات يعمل تلقائياً**"
+            f"📌 الإصدار: {version_number}\n"
+            f"📦 الحجم: {file_size}\n"
+            f"🔢 الكود: {version_code}\n\n"
+            f"🔗 {CHANNEL_USERNAME}"
         )
         
-        # إشعار المشرف
-        if user_id != ADMIN_ID:
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"📦 تطبيق جديد:\nالاسم: {app_name}\nالإصدار: {version_number}\nبواسطة: {update.effective_user.mention_html()}",
-                    parse_mode='HTML'
-                )
-            except:
-                pass
-        
     except Exception as e:
-        await loading_msg.edit_text(f"❌ حدث خطأ في النشر: {str(e)}")
-        logger.error(f"خطأ في نشر التطبيق: {e}")
+        await loading_msg.edit_text(f"❌ حدث خطأ: {str(e)}")
+        logger.error(f"خطأ في النشر: {e}")
     
-    # تنظيف البيانات
     if user_id in app_data:
         del app_data[user_id]
     
     return ConversationHandler.END
 
+# ========== هذا هو الجزء المهم - معالج التحميل الصحيح ==========
 async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج زر التحميل - مع التأكد من عمل اليوزربوت والعداد"""
+    """معالج زر التحميل - مع التأكد من عمل كل شيء"""
     query = update.callback_query
     user_id = query.from_user.id
-    await query.answer()
+    
+    # رد سريع على الضغطة
+    await query.answer("📦 جاري تجهيز الملف...")
     
     app_id = query.data.replace("download_", "")
     downloads = load_downloads()
     
-    if app_id in downloads:
-        app_info = downloads[app_id]
+    if app_id not in downloads:
+        await query.edit_message_text("❌ التطبيق غير موجود")
+        return
+    
+    app_info = downloads[app_id]
+    
+    # تغيير نص الزر مؤقتاً
+    try:
+        await query.edit_message_text(
+            text=f"📦 **جاري التحميل...**\nسيتم إرسال {app_info['name']} إلى الخاص خلال لحظات"
+        )
+    except:
+        pass
+    
+    try:
+        # 1. التأكد من اتصال اليوزربوت
+        logger.info(f"محاولة إرسال الملف للمستخدم {user_id}")
         
+        if not await ensure_userbot():
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="❌ عذراً، هناك مشكلة في الاتصال. حاول مرة أخرى لاحقاً."
+            )
+            return
+        
+        # 2. إرسال الملف عبر اليوزربوت
+        await user_client.send_file(
+            user_id,
+            app_info['file_id'],
+            caption=(
+                f"📥 **{app_info['name']}**\n"
+                f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+                f"📌 الإصدار: {app_info.get('version', 'V1')}\n"
+                f"📦 الحجم: {app_info.get('file_size', 'غير معروف')}\n"
+                f"🔢 الكود: {app_info.get('version_code', 'بدون')}\n"
+                f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
+                f"شكراً لتحميلك التطبيق! ❤️"
+            ),
+            parse_mode='markdown'
+        )
+        
+        logger.info(f"تم إرسال الملف بنجاح للمستخدم {user_id}")
+        
+        # 3. زيادة العداد
+        app_info['downloads'] += 1
+        save_downloads(downloads)
+        logger.info(f"تم زيادة العداد إلى {app_info['downloads']}")
+        
+        # 4. تحديث الزر في القناة
         try:
-            # رسالة انتظار
-            await query.edit_message_text(
-                text=f"📦 **جاري تجهيز الملف...**\nسيتم إرسال {app_info['name']} إليك في الخاص خلال ثواني",
-                reply_markup=None
-            )
-            
-            # التأكد من اتصال اليوزربوت
-            if not user_client.is_connected():
-                await user_client.connect()
-                if not await user_client.is_user_authorized():
-                    if SESSION_STRING:
-                        from telethon.sessions import StringSession
-                        user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-                        await user_client.connect()
-                    else:
-                        await user_client.start(phone=PHONE_NUMBER)
-            
-            # إرسال الملف عن طريق يوزر بوت
-            await user_client.send_file(
-                user_id,
-                app_info['file_id'],
-                caption=(
-                    f"📥 **{app_info['name']}**\n"
-                    f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-                    f"📌 الإصدار: {app_info.get('version', 'V1')}\n"
-                    f"📦 الحجم: {app_info.get('file_size', 'غير معروف')}\n"
-                    f"🔢 الكود: {app_info.get('version_code', 'بدون')}\n"
-                    f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-                    f"شكراً لتحميلك التطبيق! ❤️"
-                ),
-                parse_mode='markdown'
-            )
-            
-            # زيادة العداد
-            app_info['downloads'] += 1
-            save_downloads(downloads)
-            
-            # تحديث الزر في القناة
-            try:
-                keyboard = [[
-                    InlineKeyboardButton(
-                        f"📥 تحميل التطبيق ({app_info['downloads']})", 
-                        callback_data=f"download_{app_id}"
-                    )
-                ]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                # البحث عن رسالة القناة وتحديثها
-                try:
-                    await context.bot.edit_message_reply_markup(
-                        chat_id=CHANNEL_USERNAME,
-                        message_id=query.message.message_id,
-                        reply_markup=reply_markup
-                    )
-                except:
-                    # إذا فشل التحديث، جرب على الرسالة الحالية
-                    await query.message.edit_reply_markup(reply_markup=reply_markup)
-            except Exception as e:
-                logger.warning(f"ماقدرتش أحدث الزر: {e}")
-            
-            # إرسال رسالة تأكيد للمستخدم
-            try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"✅ **تم التحميل بنجاح!**\nتم إرسال {app_info['name']} إلى الخاص"
+            keyboard = [[
+                InlineKeyboardButton(
+                    f"📥 تحميل التطبيق ({app_info['downloads']})", 
+                    callback_data=f"download_{app_id}"
                 )
-            except:
-                pass
+            ]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
-        except errors.FloodWaitError as e:
-            await query.edit_message_text(f"⏳ التحميل مزدحم، انتظر {e.seconds} ثانية")
+            # محاولة تحديث الرسالة الأصلية في القناة
+            await query.message.edit_reply_markup(reply_markup=reply_markup)
+            logger.info("تم تحديث الزر في القناة")
         except Exception as e:
-            await query.edit_message_text(f"❌ حدث خطأ: {str(e)[:100]}")
-            logger.error(f"خطأ في التحميل: {e}")
-    else:
-        await query.edit_message_text("❌ التطبيق غير موجود أو تم حذفه")
+            logger.warning(f"ماقدرتش أحدث الزر: {e}")
+        
+        # 5. إرسال تأكيد للمستخدم
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"✅ **تم التحميل بنجاح!**\nتم إرسال {app_info['name']} إلى الخاص"
+            )
+        except:
+            pass
+        
+        # 6. تحديث رسالة البوت
+        try:
+            await query.edit_message_text(
+                text=f"✅ **تم التحميل بنجاح!**\nتم إرسال {app_info['name']} إلى الخاص"
+            )
+        except:
+            pass
+        
+    except errors.FloodWaitError as e:
+        await query.edit_message_text(f"⏳ التحميل مزدحم، انتظر {e.seconds} ثانية")
+    except Exception as e:
+        logger.error(f"خطأ في التحميل: {e}")
+        await query.edit_message_text(f"❌ حدث خطأ: {str(e)[:100]}")
+        
+        # محاولة إعلام المستخدم
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"❌ حدث خطأ في تحميل {app_info['name']}. حاول مرة أخرى."
+            )
+        except:
+            pass
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in app_data:
         del app_data[user_id]
-    
     await update.message.reply_text("❌ تم إلغاء العملية.")
     return ConversationHandler.END
 
@@ -459,80 +503,36 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ هذه الخاصية للمشرف فقط")
         return
     
-    try:
-        await context.bot.send_message(
-            chat_id=update.effective_user.id,
-            text="✅ البوت يعمل بشكل طبيعي"
-        )
-        
-        await context.bot.send_message(
-            chat_id=CHANNEL_USERNAME,
-            text="✅ البوت يعمل ويستخدم يوزر بوت للإرسال!"
-        )
-        
-        if user_client.is_connected():
-            me = await user_client.get_me()
-            await update.message.reply_text(f"✅ اليوزربوت يعمل كـ: {me.first_name}")
-        else:
-            await update.message.reply_text("⚠️ اليوزربوت غير متصل، جاري التشغيل...")
-            await start_userbot()
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطأ: {str(e)}")
+    # اختبار اليوزربوت
+    if await ensure_userbot():
+        me = await user_client.get_me()
+        await update.message.reply_text(f"✅ اليوزربوت يعمل كـ: {me.first_name}")
+    else:
+        await update.message.reply_text("❌ اليوزربوت لا يعمل")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📚 **مساعدة البوت**\n"
         "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
-        "**الأوامر المتاحة:**\n"
+        "**الأوامر:**\n"
         "/start - بدء رفع تطبيق جديد\n"
-        "/stats - عرض الإحصائيات (للمشرف فقط)\n"
-        "/test - اختبار البوت (للمشرف فقط)\n"
-        "/help - عرض هذه المساعدة\n"
-        "/cancel - إلغاء العملية الحالية\n\n"
-        "**كيفية الرفع:**\n"
-        "1️⃣ أرسل /start\n"
-        "2️⃣ أرسل اسم التطبيق\n"
-        "3️⃣ أرسل صورة التطبيق\n"
-        "4️⃣ أرسل ملف التطبيق\n"
-        "5️⃣ أرسل كود النسخة أو اكتب 'بدون كود'\n\n"
-        "✅ سيتم نشر التطبيق مع:\n"
-        "• رقم إصدار تلقائي (V1, V2...)\n"
-        "• حجم التطبيق\n"
-        "• كود النسخة (قابل للنسخ)"
+        "/stats - الإحصائيات (للمشرف)\n"
+        "/test - اختبار اليوزربوت (للمشرف)\n"
+        "/help - هذه المساعدة\n"
+        "/cancel - إلغاء العملية"
     )
     await update.message.reply_text(help_text)
 
-# ========== تشغيل البوتين معاً ==========
+# ========== تشغيل البوت ==========
 async def run_bot():
     logger.info("🚀 جاري تشغيل البوت...")
     
-    # تشغيل يوزر بوت
-    try:
-        if SESSION_STRING:
-            from telethon.sessions import StringSession
-            global user_client
-            user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-            await user_client.connect()
-            logger.info("✅ يوزر بوت متصل باستخدام Session String")
-        else:
-            await user_client.start(phone=PHONE_NUMBER)
-            logger.info("✅ يوزر بوت متصل باستخدام رقم الهاتف")
-            session_str = user_client.session.save()
-            logger.info(f"🔑 Session string: {session_str}")
-        
-        me = await user_client.get_me()
-        logger.info(f"✅ يوزر بوت شغال كـ: {me.first_name}")
-        
-    except Exception as e:
-        logger.error(f"❌ فشل تشغيل يوزربوت: {e}")
+    # تهيئة اليوزربوت
+    await init_userbot()
     
-    await asyncio.sleep(2)
-    
-    # تشغيل البوت العادي
+    # تشغيل البوت
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # معالج المحادثة (مع إضافة VERSION_CODE)
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -550,8 +550,7 @@ async def run_bot():
     application.add_handler(CommandHandler('test', test))
     application.add_handler(CommandHandler('help', help_command))
     
-    logger.info("✅ البوت العادي يعمل...")
-    logger.info("⚡ في انتظار التطبيقات...")
+    logger.info("✅ البوت يعمل...")
     
     await application.initialize()
     await application.start()
@@ -562,7 +561,8 @@ async def run_bot():
     except KeyboardInterrupt:
         logger.info("🛑 جاري إيقاف البوت...")
         await application.stop()
-        await user_client.disconnect()
+        if user_client:
+            await user_client.disconnect()
 
 if __name__ == '__main__':
     try:
