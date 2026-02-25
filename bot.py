@@ -32,7 +32,8 @@ app_data = {}
 DOWNLOADS_FILE = "downloads_counter.json"
 VERSION_COUNTER_FILE = "version_counter.json"
 BOT_STATE_FILE = "bot_state.json"
-CODES_FILE = "codes_database.json"  # ملف خاص بالكودات
+CODES_FILE = "codes_database.json"
+SESSION_FILE = "user_session.session"  # ملف الجلسة
 
 # التأكد من وجود مجلد temp
 temp_dir = tempfile.gettempdir()
@@ -78,11 +79,9 @@ def save_bot_state(state):
     save_json_file(BOT_STATE_FILE, state)
 
 def load_codes():
-    """تحميل قاعدة بيانات الكودات"""
     return load_json_file(CODES_FILE, {'codes': {}, 'expiry_dates': {}})
 
 def save_codes(codes_data):
-    """حفظ قاعدة بيانات الكودات"""
     save_json_file(CODES_FILE, codes_data)
 
 def get_next_version():
@@ -107,95 +106,80 @@ def increment_download_count(app_id):
         return downloads[app_id]['downloads']
     return 0
 
-def generate_code_key(version, app_name):
-    """توليد كود عشوائي"""
-    import random
-    import string
-    code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
-    return f"KEY-{code}"
-
 def check_code_expiry(expiry_date):
-    """التحقق من صلاحية الكود"""
     if not expiry_date:
-        return True  # بدون تاريخ انتهاء -> دائمًا صالح
-    expiry = datetime.fromisoformat(expiry_date)
-    return datetime.now() < expiry
+        return True
+    try:
+        expiry = datetime.fromisoformat(expiry_date)
+        return datetime.now() < expiry
+    except:
+        return True
 
 def get_code_status(expiry_date):
-    """الحصول على حالة الكود"""
     if not expiry_date:
         return "✅ دائم (بدون انتهاء)"
-    expiry = datetime.fromisoformat(expiry_date)
-    remaining = expiry - datetime.now()
-    if remaining.days < 0:
-        return "❌ منتهي الصلاحية"
-    elif remaining.days == 0:
-        hours = remaining.seconds // 3600
-        return f"⚠️ ينتهي اليوم (بعد {hours} ساعة)"
-    else:
-        return f"⏳ متبقي {remaining.days} يوم"
-
-# دوال التعامل مع الكودات
-async def handle_code_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة طلب الكود في المجموعة"""
-    message = update.message
-    if not message.text or not message.chat.username == 'GSN_MOD_Developer':
-        return
-    
-    text = message.text.strip().lower()
-    codes_data = load_codes()
-    
-    # البحث عن الكود المطلوب
-    for version, code_info in codes_data['codes'].items():
-        if text in [version.lower(), f"كود {version.lower()}", f"key {version.lower()}", f"{version.lower()} كود"]:
-            # التحقق من الصلاحية
-            expiry_date = codes_data['expiry_dates'].get(version)
-            if check_code_expiry(expiry_date):
-                await message.reply_text(
-                    f"🔑 **كود {version}**\n\n"
-                    f"`{code_info['key']}`\n\n"
-                    f"📱 **التطبيق:** {code_info['app_name']}\n"
-                    f"📊 **الحالة:** {get_code_status(expiry_date)}",
-                    parse_mode='Markdown'
-                )
-            else:
-                await message.reply_text(
-                    f"❌ **كود {version} منتهي الصلاحية**\n\n"
-                    f"تاريخ الانتهاء: {expiry_date}",
-                    parse_mode='Markdown'
-                )
-            return
+    try:
+        expiry = datetime.fromisoformat(expiry_date)
+        remaining = expiry - datetime.now()
+        if remaining.days < 0:
+            return "❌ منتهي الصلاحية"
+        elif remaining.days == 0:
+            hours = remaining.seconds // 3600
+            return f"⚠️ ينتهي اليوم (بعد {hours} ساعة)"
+        else:
+            return f"⏳ متبقي {remaining.days} يوم"
+    except:
+        return "✅ صالح"
 
 # تشغيل اليوزربوت
 user_client = None
-
-async def validate_userbot_session():
-    global user_client
-    try:
-        if user_client and user_client.is_connected():
-            await user_client.get_me()
-            return True
-    except Exception as e:
-        logger.error(f"خطأ في التحقق من جلسة اليوزربوت: {e}")
-    return False
 
 async def init_userbot():
     global user_client
     try:
         logger.info("🔄 جاري تشغيل اليوزربوت...")
         
+        # محاولة استخدام الجلسة المحفوظة أولاً
+        if os.path.exists(SESSION_FILE):
+            try:
+                user_client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
+                await user_client.connect()
+                if await user_client.is_user_authorized():
+                    me = await user_client.get_me()
+                    logger.info(f"✅ تم الاتصال باستخدام الجلسة المحفوظة: {me.first_name}")
+                    return True
+                else:
+                    await user_client.disconnect()
+            except Exception as e:
+                logger.warning(f"❌ فشل الاتصال بالجلسة المحفوظة: {e}")
+        
+        # استخدام Session String إذا كان موجود
         if SESSION_STRING:
             user_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
             await user_client.connect()
-        else:
-            user_client = TelegramClient('user_session', API_ID, API_HASH)
-            await user_client.start(phone=PHONE_NUMBER)
-            session_str = user_client.session.save()
-            logger.info(f"🔑 SESSION_STRING={session_str}")
+            if await user_client.is_user_authorized():
+                me = await user_client.get_me()
+                logger.info(f"✅ تم الاتصال باستخدام Session String: {me.first_name}")
+                # حفظ الجلسة
+                await user_client.session.save()
+                return True
+            else:
+                await user_client.disconnect()
+        
+        # تسجيل الدخول برقم الهاتف
+        user_client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
+        await user_client.start(phone=PHONE_NUMBER)
         
         me = await user_client.get_me()
-        logger.info(f"✅ اليوزربوت شغال كـ: {me.first_name}")
+        logger.info(f"✅ تم تسجيل الدخول بنجاح كـ: {me.first_name}")
+        
+        # حفظ Session String
+        session_str = StringSession.save(user_client.session)
+        logger.info(f"🔑 SESSION_STRING={session_str}")
+        logger.info(f"💾 تم حفظ الجلسة في {SESSION_FILE}")
+        
         return True
+        
     except Exception as e:
         logger.error(f"❌ فشل تشغيل اليوزربوت: {e}")
         return False
@@ -206,28 +190,36 @@ async def ensure_userbot():
         if user_client is None:
             success = await init_userbot()
             if not success:
+                logger.error("❌ فشل في تشغيل اليوزربوت")
                 return False
+        
+        # التأكد من الاتصال
         if not user_client.is_connected():
+            logger.info("🔄 جاري إعادة الاتصال...")
             await user_client.connect()
         
-        if not await validate_userbot_session():
-            logger.warning("جلسة اليوزربوت غير صالحة، جاري إعادة الاتصال...")
+        # التحقق من الصلاحية
+        try:
+            await user_client.get_me()
+            return True
+        except:
+            logger.warning("⚠️ الجلسة غير صالحة، جاري إعادة تسجيل الدخول...")
             await user_client.disconnect()
-            await user_client.connect()
-        
-        return True
+            await user_client.start(phone=PHONE_NUMBER)
+            return True
+            
     except Exception as e:
-        logger.error(f"خطأ في ensure_userbot: {e}")
+        logger.error(f"❌ خطأ في ensure_userbot: {e}")
         return False
 
-async def download_with_timeout(coroutine, timeout=60):
+async def download_with_timeout(coroutine, timeout=120):
     try:
         return await asyncio.wait_for(coroutine, timeout=timeout)
     except asyncio.TimeoutError:
-        logger.error("انتهت مهلة التحميل")
+        logger.error("⏰ انتهت مهلة التحميل")
         return None
     except Exception as e:
-        logger.error(f"خطأ في التحميل: {e}")
+        logger.error(f"❌ خطأ في التحميل: {e}")
         return None
 
 # دوال البوت
@@ -275,15 +267,13 @@ async def get_version_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     app_data[user_id]['version_code'] = version
     
-    # سؤال عن إضافة كود خاص
     keyboard = [
         [InlineKeyboardButton("✅ نعم، أضف كود", callback_data="code_yes")],
         [InlineKeyboardButton("❌ لا، بدون كود", callback_data="code_no")]
     ]
     
     await update.message.reply_text(
-        "🔑 **هل تريد إضافة كود خاص للتطبيق؟**\n\n"
-        "عند إضافة كود، المستخدمين يقدرون يطلبونه في المجموعة",
+        "🔑 **هل تريد إضافة كود خاص للتطبيق؟**",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return CODE_KEY
@@ -301,15 +291,13 @@ async def code_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         app_data[user_id]['has_code'] = True
         await query.edit_message_text(
             "🔑 **أرسل الكود الخاص بالتطبيق**\n\n"
-            "مثال: GSN-PRO-2024\n\n"
-            "⚠️ الكود سيتم حفظه في قاعدة البيانات"
+            "مثال: GSN-PRO-2024"
         )
         return CODE_KEY
     else:
         app_data[user_id]['has_code'] = False
         app_data[user_id]['code_key'] = None
         app_data[user_id]['expiry_days'] = None
-        # الانتقال لاختيار الوصف
         await show_description_options(update, context, user_id)
         return DESCRIPTION
 
@@ -319,7 +307,6 @@ async def get_code_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     app_data[user_id]['code_key'] = code
     
-    # سؤال عن مدة الصلاحية
     keyboard = [
         [InlineKeyboardButton("📅 30 يوم", callback_data="expiry_30")],
         [InlineKeyboardButton("📅 60 يوم", callback_data="expiry_60")],
@@ -350,12 +337,10 @@ async def get_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_text("✅ تم تحديد المدة، جاري اختيار الوصف...")
     
-    # الانتقال لاختيار الوصف
     await show_description_options(update, context, user_id)
     return DESCRIPTION
 
 async def show_description_options(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id):
-    """عرض خيارات الوصف"""
     keyboard = [
         [InlineKeyboardButton("🔥 وصف قوي", callback_data="desc_strong")],
         [InlineKeyboardButton("✨ وصف احترافي", callback_data="desc_professional")],
@@ -364,7 +349,7 @@ async def show_description_options(update: Update, context: ContextTypes.DEFAULT
         [InlineKeyboardButton("📝 كتابة وصف مخصص", callback_data="desc_custom")]
     ]
     
-    if isinstance(update, Update) and update.callback_query:
+    if isinstance(update, Update) and hasattr(update, 'callback_query') and update.callback_query:
         await update.callback_query.edit_message_text(
             "📝 **اختر نوع الوصف للتطبيق:**",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -391,7 +376,6 @@ async def description_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("📝 أرسل الوصف الذي تريده:")
         return DESCRIPTION
     
-    # توليد وصف تلقائي
     data = app_data[user_id]
     version_num = get_next_version()
     
@@ -476,7 +460,6 @@ async def description_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await query.edit_message_text("✅ تم اختيار الوصف، جاري النشر...")
     
-    # متابعة النشر
     await publish_app(update, context, user_id)
     return ConversationHandler.END
 
@@ -497,7 +480,7 @@ async def get_custom_description(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 async def publish_app(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id):
-    """نشر التطبيق في القناة وحفظ البيانات"""
+    """نشر التطبيق في القناة"""
     data = app_data[user_id]
     version_num = data['version_num']
     app_id = f"app_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -511,14 +494,13 @@ async def publish_app(update: Update, context: ContextTypes.DEFAULT_TYPE, user_i
             'version': version_num
         }
         
-        # حساب تاريخ الانتهاء
         if data.get('expiry_days'):
             expiry_date = (datetime.now() + timedelta(days=data['expiry_days'])).isoformat()
             codes_data['expiry_dates'][version_num] = expiry_date
         
         save_codes(codes_data)
     
-    # حفظ التطبيق في قاعدة البيانات
+    # حفظ التطبيق
     downloads = load_downloads()
     downloads[app_id] = {
         'name': data['name'],
@@ -538,7 +520,7 @@ async def publish_app(update: Update, context: ContextTypes.DEFAULT_TYPE, user_i
     }
     save_downloads(downloads)
     
-    # تحديث حالة البوت (حفظ جميع التطبيقات)
+    # تحديث حالة البوت
     bot_state = load_bot_state()
     if 'apps_list' not in bot_state:
         bot_state['apps_list'] = []
@@ -559,7 +541,6 @@ async def publish_app(update: Update, context: ContextTypes.DEFAULT_TYPE, user_i
         [InlineKeyboardButton("ℹ️ معلومات التطبيق", callback_data=f"info_{app_id}")]
     ]
     
-    # إضافة زر الكود إذا وجد
     if data.get('has_code', False) and data.get('code_key'):
         keyboard_buttons.insert(1, [InlineKeyboardButton("🔑 طلب الكود", callback_data=f"code_{app_id}")])
     
@@ -572,30 +553,10 @@ async def publish_app(update: Update, context: ContextTypes.DEFAULT_TYPE, user_i
         parse_mode='Markdown'
     )
     
-    # إرسال تأكيد للمستخدم
-    confirmation = f"""✅ **تم النشر بنجاح!**
-
-📱 **التطبيق:** {data['name']}
-📌 **الإصدار:** {version_num}
-📢 **القناة:** {CHANNEL_USERNAME}"""
-
-    if data.get('has_code', False) and data.get('code_key'):
-        expiry_info = f"\n🔑 **الكود:** `{data['code_key']}`"
-        if data.get('expiry_days'):
-            expiry_info += f"\n⏳ **مدة الصلاحية:** {data['expiry_days']} يوم"
-        else:
-            expiry_info += f"\n♾️ **بدون انتهاء**"
-        confirmation += expiry_info
-    
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=confirmation,
-        parse_mode='Markdown'
-    )
-    
+    await update.effective_user.send_message(f"✅ تم النشر بنجاح في {CHANNEL_USERNAME}!\n📱 الإصدار: {version_num}")
     del app_data[user_id]
 
-# دالة التحميل
+# دالة التحميل المعدلة
 async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -609,48 +570,70 @@ async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ التطبيق غير موجود")
         return
     
+    # إرسال رسالة الحالة
     status_msg = await context.bot.send_message(
         chat_id=user_id,
         text=f"📦 جاري تجهيز {app['name']} للتحميل..."
     )
     
     try:
+        # التأكد من تشغيل اليوزربوت
+        logger.info("🔄 التحقق من اتصال اليوزربوت...")
         if not await ensure_userbot():
-            await status_msg.edit_text("❌ مشكلة في الاتصال بالخادم، حاول مرة أخرى")
+            await status_msg.edit_text("❌ فشل الاتصال باليوزربوت، تأكد من بيانات الدخول")
             return
         
+        logger.info("✅ اليوزربوت متصل بنجاح")
         await status_msg.edit_text("📥 جاري تحميل الملف من الخادم...")
+        
+        # تحميل الملف
         file = await context.bot.get_file(app['file_id'])
         
+        # إنشاء ملف مؤقت
         with tempfile.NamedTemporaryFile(delete=False, suffix='.apk') as tmp:
             path = tmp.name
         
         await status_msg.edit_text("📦 جاري تجهيز الملف للإرسال...")
-        download_coro = file.download_to_drive(path)
-        result = await download_with_timeout(download_coro, timeout=120)
         
-        if result is None:
-            await status_msg.edit_text("❌ فشل تحميل الملف (انتهت المهلة)")
+        # تحميل الملف مع مهلة
+        try:
+            await file.download_to_drive(path)
+            logger.info(f"✅ تم تحميل الملف: {path}")
+        except Exception as e:
+            logger.error(f"❌ فشل تحميل الملف: {e}")
+            await status_msg.edit_text("❌ فشل تحميل الملف من الخادم")
             if os.path.exists(path):
                 os.remove(path)
             return
         
         await status_msg.edit_text("📤 جاري إرسال الملف إلى الخاص...")
         
-        caption = f"""✅ **{app['name']} {app['version']}**
+        # إرسال الملف
+        try:
+            caption = f"""✅ **{app['name']} {app['version']}**
 
 📥 تم التحميل بنجاح
 ⚡️ استمتع بالتجربة
         
 📊 {app['file_size']} | الإصدار: {app['version_code']}"""
+            
+            await user_client.send_file(user_id, path, caption=caption, parse_mode='Markdown')
+            logger.info(f"✅ تم إرسال الملف للمستخدم {user_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ فشل إرسال الملف: {e}")
+            await status_msg.edit_text("❌ فشل إرسال الملف، حاول مرة أخرى")
+            if os.path.exists(path):
+                os.remove(path)
+            return
         
-        await user_client.send_file(user_id, path, caption=caption, parse_mode='Markdown')
+        # تنظيف الملف المؤقت
         os.remove(path)
         
         # تحديث العداد
         new_count = increment_download_count(app_id)
         
-        # تحديث الزر
+        # تحديث الزر في القناة
         try:
             keyboard_buttons = [
                 [InlineKeyboardButton(f"📥 تحميل ({new_count})", callback_data=f"download_{app_id}")],
@@ -661,14 +644,14 @@ async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard_buttons))
         except Exception as e:
-            logger.error(f"خطأ في تحديث الزر: {e}")
+            logger.error(f"⚠️ خطأ في تحديث الزر: {e}")
         
         await status_msg.edit_text(f"✅ تم إرسال {app['name']} إلى الخاص بنجاح!")
         
     except Exception as e:
-        logger.error(f"خطأ في التحميل: {e}")
+        logger.error(f"❌ خطأ غير متوقع: {e}")
         try:
-            await status_msg.edit_text("❌ حدث خطأ أثناء التحميل، حاول مرة أخرى")
+            await status_msg.edit_text("❌ حدث خطأ غير متوقع، حاول مرة أخرى")
         except:
             pass
         
@@ -676,7 +659,6 @@ async def download_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             os.remove(path)
 
 async def code_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض الكود الخاص بالتطبيق"""
     query = update.callback_query
     user_id = query.from_user.id
     await query.answer("🔑 جاري تجهيز الكود...")
@@ -689,7 +671,6 @@ async def code_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ الكود غير موجود")
         return
     
-    # التحقق من الصلاحية
     codes_data = load_codes()
     expiry_date = codes_data.get('expiry_dates', {}).get(app['version'])
     
@@ -708,7 +689,6 @@ async def code_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📱 **التطبيق:** {app['name']}
 📊 **الحالة:** {get_code_status(expiry_date)}"""
     
-    # إرسال الكود في الخاص
     await context.bot.send_message(
         chat_id=user_id,
         text=code_message,
@@ -718,7 +698,6 @@ async def code_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("✅ تم إرسال الكود إلى الخاص")
 
 async def info_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض معلومات التطبيق"""
     query = update.callback_query
     await query.answer()
     
@@ -758,7 +737,6 @@ async def info_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def back_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """الرجوع للوصف الرئيسي"""
     query = update.callback_query
     await query.answer()
     
@@ -798,14 +776,13 @@ async def test(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await ensure_userbot():
             me = await user_client.get_me()
             bot_state = load_bot_state()
-            codes_data = load_codes()
             
             await status_msg.edit_text(
                 f"✅ **البوت يعمل بكفاءة!**\n\n"
                 f"👤 **اليوزربوت:** {me.first_name}\n"
                 f"📱 **إجمالي التطبيقات:** {bot_state.get('total_apps', 0)}\n"
-                f"🔑 **عدد الكودات:** {len(codes_data.get('codes', {}))}\n"
-                f"🔄 **آخر إصدار:** {load_version_counter()}",
+                f"🔄 **آخر إصدار:** {load_version_counter()}\n"
+                f"💾 **ملف الجلسة:** موجود",
                 parse_mode='Markdown'
             )
         else:
@@ -823,7 +800,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_state = load_bot_state()
     codes_data = load_codes()
     
-    # حساب الكودات النشطة
     active_codes = 0
     for version, expiry in codes_data.get('expiry_dates', {}).items():
         if check_code_expiry(expiry):
@@ -843,7 +819,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(stats_text, parse_mode='Markdown')
 
 async def list_apps(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض قائمة التطبيقات"""
     if update.effective_user.id != ADMIN_ID:
         return
     
@@ -855,10 +830,42 @@ async def list_apps(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     text = "📱 **قائمة التطبيقات:**\n\n"
-    for i, app in enumerate(apps_list[-10:], 1):  # آخر 10 تطبيقات
+    for i, app in enumerate(apps_list[-10:], 1):
         text += f"{i}. **{app['name']}** - {app['version']} - {app['date']}\n"
     
     await update.message.reply_text(text, parse_mode='Markdown')
+
+# معالجة طلبات الكود في المجموعة
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message.text or not message.chat:
+        return
+    
+    # التحقق من أن الرسالة في المجموعة المحددة
+    if message.chat.username and message.chat.username.lower() == 'gsn_mod_developer':
+        text = message.text.strip().lower()
+        codes_data = load_codes()
+        
+        for version, code_info in codes_data.get('codes', {}).items():
+            version_lower = version.lower()
+            if text in [version_lower, f"كود {version_lower}", f"key {version_lower}", f"{version_lower} كود"]:
+                expiry_date = codes_data.get('expiry_dates', {}).get(version)
+                
+                if check_code_expiry(expiry_date):
+                    await message.reply_text(
+                        f"🔑 **كود {version}**\n\n"
+                        f"`{code_info['key']}`\n\n"
+                        f"📱 **التطبيق:** {code_info['app_name']}\n"
+                        f"📊 **الحالة:** {get_code_status(expiry_date)}",
+                        parse_mode='Markdown'
+                    )
+                else:
+                    await message.reply_text(
+                        f"❌ **كود {version} منتهي الصلاحية**\n\n"
+                        f"📅 تاريخ الانتهاء: {expiry_date}",
+                        parse_mode='Markdown'
+                    )
+                return
 
 # تشغيل البوت
 async def run_bot():
@@ -866,14 +873,15 @@ async def run_bot():
     
     bot_state = load_bot_state()
     logger.info(f"📊 آخر حالة: {bot_state.get('total_apps', 0)} تطبيق")
-    logger.info(f"🔑 إجمالي الكودات: {len(load_codes().get('codes', {}))}")
     
-    await init_userbot()
+    # تهيئة اليوزربوت
+    if not await init_userbot():
+        logger.warning("⚠️ اليوزربوت لم يعمل، بعض الميزات قد لا تعمل")
     
     app = Application.builder().token(BOT_TOKEN).build()
     
-    # معالج رسائل المجموعة للكودات
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code_request), group=1)
+    # معالج رسائل المجموعة
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message), group=1)
     
     # محادثة رفع التطبيقات
     conv = ConversationHandler(
